@@ -1,0 +1,266 @@
+## Fraud Detection Analysis - Task 1
+
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+import plotly.express as px
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+
+# Add the parent directory to the system path 
+import os
+import sys
+sys.path.append(os.path.abspath(os.path.join('..')))
+
+from scripts.preprocess import *
+
+# Data Loading 
+fraud_data, ip_country, credit_card = load_datasets()
+
+### Initial Data Inspection
+
+# fraud data
+print("\nFraud Data Info:")
+get_data_info(fraud_data)
+print("\nSample of Fraud Data:")
+fraud_data.head()
+
+fraud_data.info()
+
+# IP country data
+print("\nIP Country Data Info:")
+print(get_data_info(ip_country))
+print("\nSample of IP Country Data:")
+ip_country.head()
+
+ip_country.info()
+
+# credit card data 
+print("\nCredit Card Data Info:")
+print(get_data_info(credit_card))
+print("\nSample of Credit Card Data:")
+credit_card.head()
+
+credit_card.info()
+
+### Missing Values Analysis
+
+print("\nMissing values in Fraud Data:")
+print(check_missing_values(fraud_data))
+    
+print("\nMissing values in IP Country Data:")
+print(check_missing_values(ip_country))
+    
+print("\nMissing values in Credit Card Data:")
+print(check_missing_values(credit_card))
+
+### Duplicate Analysis
+
+print("\nDuplicates in Fraud Data:")
+print(check_duplicates(fraud_data))
+    
+print("\nDuplicates in IP Country Data:")
+print(check_duplicates(ip_country))
+    
+print("\nDuplicates in Credit Card Data:")
+print(check_duplicates(credit_card))
+
+### Data Cleaning
+
+# Handle missing values
+fraud_data_cleaned = handle_missing_values(fraud_data)
+ip_country_cleaned = handle_missing_values(ip_country)
+credit_card_cleaned = handle_missing_values(credit_card)
+
+# Remove duplicates and correct data types
+fraud_data_cleaned = clean_data(fraud_data_cleaned)
+ip_country_cleaned = clean_data(ip_country_cleaned)
+credit_card_cleaned = clean_data(credit_card_cleaned)    
+
+print("\nData shapes after cleaning:")
+print(f"Fraud Data: {fraud_data_cleaned.shape}")
+print(f"IP Country Data: {ip_country_cleaned.shape}")
+print(f"Credit Card Data: {credit_card_cleaned.shape}")
+
+ ### Merge Datasets for Geolocation Analysis
+
+# Convert IP addresses to integers in fraud_data
+fraud_data_cleaned['ip_int'] = fraud_data_cleaned['ip_address'].apply(lambda x: ip_to_int(str(int(x))) if pd.notna(x) else None)
+
+# Convert IP address bounds in ip_country_cleaned to integers
+ip_country_cleaned['lower_bound_ip_address'] = ip_country_cleaned['lower_bound_ip_address'].astype(int)
+ip_country_cleaned['upper_bound_ip_address'] = ip_country_cleaned['upper_bound_ip_address'].astype(int)
+
+# Sort the IP range dataset by the lower bound
+ip_country_cleaned.sort_values('lower_bound_ip_address', inplace=True)
+
+# Perform a merge based on the IP ranges
+fraud_data_with_country = pd.merge_asof(
+    fraud_data_cleaned.sort_values('ip_int'),  # Sort fraud data by 'ip_int'
+    ip_country_cleaned[['lower_bound_ip_address', 'upper_bound_ip_address', 'country']],  # Select relevant columns
+    left_on='ip_int',  # Match fraud data based on 'ip_int'
+    right_on='lower_bound_ip_address',  # Match IP ranges from country data
+    direction='backward',  # Match to the closest lower bound
+)
+
+# Filter the merged results where the 'ip_int' falls within the range of the IP bounds
+fraud_data_with_country = fraud_data_with_country[
+    (fraud_data_with_country['ip_int'] >= fraud_data_with_country['lower_bound_ip_address']) &
+    (fraud_data_with_country['ip_int'] <= fraud_data_with_country['upper_bound_ip_address'])
+]
+
+# Drop unnecessary columns
+fraud_data_with_country.drop(['lower_bound_ip_address', 'upper_bound_ip_address'], axis=1, inplace=True)
+
+# Check the first few rows of the merged data
+print(fraud_data_with_country.head())
+
+print("\nShape after merging:", fraud_data_with_country.shape)
+print("\nSample of merged data:")
+fraud_data_with_country.head()
+
+### Feature Engineering
+
+# Create time-based features
+fraud_data_featured = create_time_features(fraud_data_with_country)
+
+fraud_data_featured.head()
+
+ # Calculate transaction-based features
+fraud_data_featured = calculate_transaction_features(fraud_data_featured)
+
+fraud_data_featured.head()
+
+print("\nNew features created:")
+new_features = set(fraud_data_featured.columns) - set(fraud_data_with_country.columns)
+new_features
+
+### Exploratory Data Analysis
+
+# Univariate Analysis - Histograms for Numeric Variables
+numeric_columns = ['purchase_value', 'age', 'transaction_velocity']
+
+fig, axes = plt.subplots(1, len(numeric_columns), figsize=(18, 5))
+for i, col in enumerate(numeric_columns):
+    if col in fraud_data_featured.columns:
+        sns.histplot(fraud_data_featured[col], kde=True, bins=30, ax=axes[i])
+        axes[i].set_title(f'Distribution of {col}')
+
+plt.tight_layout()
+plt.show()
+
+# Bar plots for Categorical Variables
+categorical_columns = ['source', 'browser', 'sex']
+
+fig, axes = plt.subplots(1, len(categorical_columns), figsize=(18, 5))
+for i, col in enumerate(categorical_columns):
+    if col in fraud_data_featured.columns:
+        sns.countplot(data=fraud_data_featured, x=col, ax=axes[i], hue=col, legend=False, palette='magma')
+        axes[i].set_title(f'Distribution of {col}')
+
+plt.tight_layout()
+plt.show()
+
+# Analyze fraud patterns
+print("\nAnalyzing fraud patterns...")
+analyze_fraud_patterns(fraud_data_featured)
+
+# Distribution analysis of key features
+key_features = ['purchase_value', 'age', 'hour_of_day', 'transaction_velocity']
+for feature in key_features:
+    if feature in fraud_data_featured.columns:
+        print(f"\nAnalyzing distribution of {feature}...")
+        plot_distribution(fraud_data_featured, feature)
+
+
+# Bivariate Analysis - Boxplot for Fraud and Purchase Value by Gender
+plt.figure(figsize=(8, 5))
+sns.boxplot(x='sex', y='purchase_value', hue='class', data=fraud_data_featured)
+plt.title('Purchase Value by Gender and Fraud Class')
+plt.show()
+
+
+# Demographic Segmentation - Age Groups
+fraud_data_featured['age_group'] = pd.cut(fraud_data_featured['age'], bins=[18, 25, 35, 45, 55, 65, 100], labels=['18-25', '26-35', '36-45', '46-55', '56-65', '65+'])
+
+# Fraud Rate by Age Group
+age_fraud = fraud_data_featured.groupby('age_group', observed=False)['class'].mean().reset_index()
+
+# Plot Fraud Rate by Age Group
+plt.figure(figsize=(10,6))
+sns.barplot(data=age_fraud, x='age_group', y='class', hue='age_group', palette='viridis', legend=False)
+plt.title('Fraud Rate by Age Group')
+plt.xlabel('Age Group')
+plt.ylabel('Fraud Rate')
+plt.show()
+
+# Plot correlation matrix for numeric features
+print("\nGenerating correlation matrix...")
+plot_correlation_matrix(fraud_data_featured)
+
+### Multivariate Analysis
+
+# Pairplot
+sns.pairplot(fraud_data_featured, vars=['purchase_value', 'age', 'transaction_velocity'], hue='class', palette='Set1')
+plt.suptitle('Pairplot of Numeric Features Colored by Fraud Class', y=1.02)
+plt.show()
+
+### Time Series Analysis 
+
+# Set 'purchase_time' as the index
+fraud_data_featured.set_index('purchase_time', inplace=True)
+
+# Resample data by day
+daily_transactions = fraud_data_featured.resample('D').size()
+daily_frauds = fraud_data_featured[fraud_data_featured['class'] == 1].resample('D').size()
+
+# Plot Transaction Trends
+plt.figure(figsize=(12,6))
+plt.plot(daily_transactions, label='Total Transactions')
+plt.plot(daily_frauds, label='Fraudulent Transactions')
+plt.title('Daily Transaction Trends')
+plt.xlabel('Date')
+plt.ylabel('Number of Transactions')
+plt.legend()
+plt.show()
+
+# Reset index for further analyses
+fraud_data_featured.reset_index(inplace=True)
+
+### Geographical Analysis
+
+# Fraud Rate by Country
+country_fraud = fraud_data_featured.groupby('country')['class'].mean().reset_index()
+
+# Plotting on a World Map using Plotly
+fig = px.choropleth(country_fraud, locations='country',
+                    locationmode='country names',
+                    color='class',
+                    hover_name='country',
+                    color_continuous_scale='Reds',
+                    title='Fraud Rate by Country')
+fig.show()
+
+### Feature Encoding and Normalization
+
+# Encode categorical features
+fraud_data_encoded = encode_categorical_features(fraud_data_featured)
+credit_card_encoded = encode_categorical_features(credit_card_cleaned)
+
+# Normalize features
+fraud_data_final = normalize_features(fraud_data_encoded)
+credit_card_final = normalize_features(credit_card_encoded)
+
+fraud_data_final.head()
+
+credit_card_final.head()
+
+print("\nFinal shapes:")
+print(f"Fraud Data: {fraud_data_final.shape}")
+print(f"Credit Card Data: {credit_card_final.shape}")
+
+# Save Processed Data
+    
+fraud_data_final.to_csv('../data/processed/processed_fraud_data.csv', index=False)
+credit_card_final.to_csv('../data/processed/processed_credit_card.csv', index=False)
